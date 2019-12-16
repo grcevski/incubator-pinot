@@ -39,6 +39,8 @@ import org.slf4j.LoggerFactory;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
+import static junit.framework.Assert.*;
+
 
 /**
  * Some tests for the PQL 2 compiler.
@@ -475,5 +477,35 @@ public class Pql2CompilerTest {
       Assert.assertEquals(orderBy.getColumn(), orderBys.get(i));
       Assert.assertEquals(orderBy.isIsAsc(), isAscs.get(i).booleanValue());
     }
+  }
+
+  /**
+   * Test that ensures we are properly caching requests for performance reasons
+   */
+  @Test
+  public void testQueryCaching() {
+    final String PQL = "select * from table order by d2 asc, d3 desc";
+    final String PQL1 = "select * from table order by d2, d3 desc";
+    final String EXP = "`a.b.c`";
+    final String EXP1 = "`a.b.d`";
+
+    BrokerRequest brokerRequest = COMPILER.compileToBrokerRequest(PQL);
+    BrokerRequest secondBrokerRequest = COMPILER.compileToBrokerRequest(PQL1);
+    BrokerRequest redoBrokerRequest = COMPILER.compileToBrokerRequest(PQL);
+
+    assertEquals(brokerRequest, redoBrokerRequest);
+    // This is completely different Broker Request
+    assertFalse(brokerRequest == secondBrokerRequest);
+    // Identity equality won't work because we do deepCopy since broker request options are mutable
+    assertFalse(brokerRequest == redoBrokerRequest);
+
+    TransformExpressionTree expTree = COMPILER.compileToExpressionTree(EXP);
+    TransformExpressionTree secondExpTree = COMPILER.compileToExpressionTree(EXP1);
+    TransformExpressionTree redoExpTree = COMPILER.compileToExpressionTree(EXP);
+
+    // This is completely different Broker Request
+    assertFalse(expTree == secondExpTree);
+    // Identity equality should work because we have cached the previous request
+    assertTrue(expTree == redoExpTree);
   }
 }
