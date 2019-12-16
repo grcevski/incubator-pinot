@@ -103,8 +103,7 @@ public class CombineGroupByOperator extends BaseOperator<IntermediateResultsBloc
    */
   @Override
   protected IntermediateResultsBlock getNextBlock() {
-    ConcurrentHashMap<String, Object[]> resultsMap = new ConcurrentHashMap<>();
-    AtomicInteger numGroups = new AtomicInteger();
+    List<Map<String, Object>> results = new ArrayList<>();
     ConcurrentLinkedQueue<ProcessingException> mergedProcessingExceptions = new ConcurrentLinkedQueue<>();
 
     AggregationFunctionContext[] aggregationFunctionContexts =
@@ -113,6 +112,7 @@ public class CombineGroupByOperator extends BaseOperator<IntermediateResultsBloc
     AggregationFunction[] aggregationFunctions = new AggregationFunction[numAggregationFunctions];
     for (int i = 0; i < numAggregationFunctions; i++) {
       aggregationFunctions[i] = aggregationFunctionContexts[i].getAggregationFunction();
+      results.add(new ConcurrentHashMap<>(1000, 0.2f, 1000));
     }
 
     // We use a CountDownLatch to track if all Futures are finished by the query timeout, and cancel the unfinished
@@ -154,26 +154,27 @@ public class CombineGroupByOperator extends BaseOperator<IntermediateResultsBloc
             // Merge aggregation group-by result.
             AggregationGroupByResult aggregationGroupByResult = intermediateResultsBlock.getAggregationGroupByResult();
             if (aggregationGroupByResult != null) {
-              // Iterate over the group-by keys, for each key, update the group-by result in the resultsMap.
-              Iterator<GroupKeyGenerator.GroupKey> groupKeyIterator = aggregationGroupByResult.getGroupKeyIterator();
-              while (groupKeyIterator.hasNext()) {
-                GroupKeyGenerator.GroupKey groupKey = groupKeyIterator.next();
-                resultsMap.compute(groupKey._stringKey, (key, value) -> {
-                  if (value == null) {
-                    if (numGroups.getAndIncrement() < _interSegmentNumGroupsLimit) {
-                      value = new Object[numAggregationFunctions];
-                      for (int i = 0; i < numAggregationFunctions; i++) {
-                        value[i] = aggregationGroupByResult.getResultForKey(groupKey, i);
+              int index = 0;
+              for (Map<String, Object> resultsMap : results) {
+                // Iterate over the group-by keys, for each key, update the group-by result in the resultsMap.
+                Iterator<GroupKeyGenerator.GroupKey> groupKeyIterator = aggregationGroupByResult.getGroupKeyIterator();
+                final int i = index;
+                AtomicInteger numGroups = new AtomicInteger();
+                while (groupKeyIterator.hasNext()) {
+                  GroupKeyGenerator.GroupKey groupKey = groupKeyIterator.next();
+                  resultsMap.compute(groupKey._stringKey, (key, value) -> {
+                    if (value == null) {
+                      if (numGroups.getAndIncrement() < _interSegmentNumGroupsLimit) {
+                        return aggregationGroupByResult.getResultForKey(groupKey, i);
                       }
+                    } else {
+                      return aggregationFunctions[i].merge(value, aggregationGroupByResult.getResultForKey(groupKey, i));
                     }
-                  } else {
-                    for (int i = 0; i < numAggregationFunctions; i++) {
-                      value[i] = aggregationFunctions[i]
-                          .merge(value[i], aggregationGroupByResult.getResultForKey(groupKey, i));
-                    }
-                  }
-                  return value;
-                });
+                    return value;
+                  });
+                }
+
+                index ++;
               }
             }
           } catch (Exception e) {
@@ -200,8 +201,11 @@ public class CombineGroupByOperator extends BaseOperator<IntermediateResultsBloc
       // Trim the results map.
       AggregationGroupByTrimmingService aggregationGroupByTrimmingService =
           new AggregationGroupByTrimmingService(aggregationFunctions, (int) _brokerRequest.getGroupBy().getTopN());
+
+      int resultSize = (numAggregationFunctions == 0) ? 0 : results.get(0).size();
+
       List<Map<String, Object>> trimmedResults =
-          aggregationGroupByTrimmingService.trimIntermediateResultsMap(resultsMap);
+              aggregationGroupByTrimmingService.trimIntermediateResults(results);
       IntermediateResultsBlock mergedBlock =
           new IntermediateResultsBlock(aggregationFunctionContexts, trimmedResults, true);
 
@@ -227,7 +231,7 @@ public class CombineGroupByOperator extends BaseOperator<IntermediateResultsBloc
 
       // TODO: this value should be set in the inner-segment operators. Setting it here might cause false positive as we
       //       are comparing number of groups across segments with the groups limit for each segment.
-      if (resultsMap.size() >= _innerSegmentNumGroupsLimit) {
+      if (resultSize >= _innerSegmentNumGroupsLimit) {
         mergedBlock.setNumGroupsLimitReached(true);
       }
 

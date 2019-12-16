@@ -115,6 +115,42 @@ public class AggregationGroupByTrimmingService {
     return Arrays.asList(trimmedResultMaps);
   }
 
+  @Nonnull
+  public List<Map<String, Object>> trimIntermediateResults(@Nonnull List<Map<String, Object>> intermediateResults) {
+    int numAggregationFunctions = _aggregationFunctions.length;
+
+    if (intermediateResults.size() == 0) {
+      return intermediateResults;
+    }
+
+    int numGroups = intermediateResults.get(0).size();
+    if (numGroups > _trimThreshold) {
+      List<Map<String, Object>> trimmedResultMaps = new ArrayList<>(numAggregationFunctions);
+
+      // Trim the result only if number of groups is larger than the threshold
+      Sorter[] sorters = new Sorter[numAggregationFunctions];
+      for (int i = 0; i < numAggregationFunctions; i++) {
+        AggregationFunction aggregationFunction = _aggregationFunctions[i];
+        Sorter sorter = getSorter(_trimSize, aggregationFunction, aggregationFunction.isIntermediateResultComparable());
+        for (Map.Entry<String, Object> entry : intermediateResults.get(i).entrySet()) {
+          sorter.add(entry.getKey(), entry.getValue());
+        }
+        sorters[i] = sorter;
+      }
+
+      // Dump trimmed results into maps
+      for (int i = 0; i < numAggregationFunctions; i++) {
+        Map<String, Object> trimmedResultMap = new HashMap<>(_trimSize);
+        sorters[i].dumpToMap(trimmedResultMap);
+        trimmedResultMaps.add(trimmedResultMap);
+      }
+
+      return trimmedResultMaps;
+    }
+
+    return intermediateResults;
+  }
+
   /**
    * Given an array of maps from group key to final result for each aggregation function, trim the results to topN size.
    */

@@ -19,15 +19,19 @@
 package org.apache.pinot.queries;
 
 import java.io.Serializable;
+import java.util.Iterator;
+import java.util.List;
 import java.util.function.Function;
+
+import org.apache.pinot.common.response.broker.AggregationResult;
 import org.apache.pinot.common.response.broker.BrokerResponseNative;
+import org.apache.pinot.common.response.broker.GroupByResult;
 import org.apache.pinot.spi.utils.BytesUtils;
 import org.apache.pinot.core.plan.maker.InstancePlanMakerImplV2;
 import org.apache.pinot.core.startree.hll.HllUtil;
 import org.testng.annotations.Test;
 
-import static org.testng.Assert.assertFalse;
-import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.*;
 
 
 public class InterSegmentAggregationMultiValueQueriesTest extends BaseMultiValueQueriesTest {
@@ -405,6 +409,26 @@ public class InterSegmentAggregationMultiValueQueriesTest extends BaseMultiValue
     assertFalse(brokerResponse.isNumGroupsLimitReached());
 
     brokerResponse = getBrokerResponseForQuery(query, new InstancePlanMakerImplV2(1000, 1000));
+    assertTrue(brokerResponse.isNumGroupsLimitReached());
+  }
+
+  @Test
+  public void testNumGroupsMultiLimit() {
+    String query = "SELECT COUNT(*), SUM(column1) FROM testTable GROUP BY column7";
+
+    BrokerResponseNative brokerResponse = getBrokerResponseForQuery(query);
+    assertFalse(brokerResponse.isNumGroupsLimitReached());
+
+    List<AggregationResult> results = brokerResponse.getAggregationResults();
+    Iterator<GroupByResult> resultsIter = results.get(0).getGroupByResult().iterator();
+    assertEquals(resultsIter.next().getValue(), "199756");
+    assertEquals(resultsIter.next().getValue(), "29944");
+
+    resultsIter = results.get(1).getGroupByResult().iterator();
+    assertEquals(resultsIter.next().getValue(), "190754303720564.00000");
+    assertEquals(resultsIter.next().getValue(), "31917445702108.00000");
+
+    brokerResponse = getBrokerResponseForQuery(query, new InstancePlanMakerImplV2(5, 5));
     assertTrue(brokerResponse.isNumGroupsLimitReached());
   }
 }
