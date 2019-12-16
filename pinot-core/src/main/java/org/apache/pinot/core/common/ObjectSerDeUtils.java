@@ -387,23 +387,27 @@ public class ObjectSerDeUtils {
       if (size == 0) {
         return map;
       }
+      ByteBuffer temp = byteBuffer.duplicate();
 
       // De-serialize each key-value pair
       int keyTypeValue = byteBuffer.getInt();
       int valueTypeValue = byteBuffer.getInt();
       for (int i = 0; i < size; i++) {
-        Object key = ObjectSerDeUtils.deserialize(sliceByteBuffer(byteBuffer, byteBuffer.getInt()), keyTypeValue);
-        Object value = ObjectSerDeUtils.deserialize(sliceByteBuffer(byteBuffer, byteBuffer.getInt()), valueTypeValue);
+        Object key = ObjectSerDeUtils.deserialize(slideByteBuffer(byteBuffer, temp, byteBuffer.getInt()), keyTypeValue);
+        Object value = ObjectSerDeUtils.deserialize(slideByteBuffer(byteBuffer, temp, byteBuffer.getInt()), valueTypeValue);
         map.put(key, value);
       }
       return map;
     }
 
-    private ByteBuffer sliceByteBuffer(ByteBuffer byteBuffer, int size) {
-      ByteBuffer slice = byteBuffer.slice();
-      slice.limit(size);
-      byteBuffer.position(byteBuffer.position() + size);
-      return slice;
+    private ByteBuffer slideByteBuffer(ByteBuffer byteBuffer, ByteBuffer temp, int size) {
+      int head = byteBuffer.position();
+      int tail = head + size;
+      temp.limit(tail);
+      temp.position(head);
+      byteBuffer.position(tail);
+
+      return temp;
     }
   };
 
