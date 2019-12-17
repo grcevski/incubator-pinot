@@ -140,6 +140,9 @@ public class ObjectSerDeUtils {
 
     @Override
     public String deserialize(ByteBuffer byteBuffer) {
+      if (byteBuffer.hasArray()) {
+        return StringUtil.decodeUtf8(byteBuffer.array(), byteBuffer.position() + byteBuffer.arrayOffset(), byteBuffer.remaining());
+      }
       byte[] bytes = new byte[byteBuffer.remaining()];
       byteBuffer.get(bytes);
       return StringUtil.decodeUtf8(bytes);
