@@ -18,6 +18,7 @@
  */
 package org.apache.pinot.common.metrics;
 
+import com.github.benmanes.caffeine.cache.Cache;
 import com.google.common.annotations.VisibleForTesting;
 import com.yammer.metrics.core.MetricName;
 import com.yammer.metrics.core.MetricsRegistry;
@@ -31,7 +32,7 @@ import org.apache.pinot.common.Utils;
 import org.apache.pinot.common.request.BrokerRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
+import com.github.benmanes.caffeine.cache.Caffeine;
 
 /**
  * Common code for metrics implementations.
@@ -40,6 +41,7 @@ import org.slf4j.LoggerFactory;
 public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M extends AbstractMetrics.Meter, G extends AbstractMetrics.Gauge, T extends AbstractMetrics.Timer> {
 
   private static final Logger LOGGER = LoggerFactory.getLogger(AbstractMetrics.class);
+  private static final int METRICS_NAME_CACHE_SIZE = 1_000;
 
   protected final String _metricPrefix;
 
@@ -51,6 +53,8 @@ public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M e
 
   protected final boolean _global;
 
+  private final Cache<String, MetricName> _metricNameCache;
+
   public AbstractMetrics(String metricPrefix, MetricsRegistry metricsRegistry, Class clazz) {
     this(metricPrefix, metricsRegistry, clazz, false);
   }
@@ -60,6 +64,7 @@ public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M e
     _metricsRegistry = metricsRegistry;
     _clazz = clazz;
     _global = global;
+    _metricNameCache = Caffeine.newBuilder().maximumSize(METRICS_NAME_CACHE_SIZE).build();
   }
 
   public interface QueryPhase {
@@ -86,6 +91,10 @@ public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M e
     String getTimerName();
 
     boolean isGlobal();
+  }
+
+  MetricName getMetricName(String name) {
+    return _metricNameCache.get(name, n -> new MetricName(_clazz, n));
   }
 
   /**
@@ -143,9 +152,7 @@ public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M e
    * @param timeUnit The log time duration time unit
    */
   private void addValueToTimer(String fullTimerName, final long duration, final TimeUnit timeUnit) {
-    final MetricName metricName = new MetricName(_clazz, fullTimerName);
-    com.yammer.metrics.core.Timer timer =
-        MetricsHelper.newTimer(_metricsRegistry, metricName, TimeUnit.MILLISECONDS, TimeUnit.SECONDS);
+    final MetricName metricName = getMetricName(fullTimerName);
     MetricsHelper.newTimer(_metricsRegistry, metricName, TimeUnit.MILLISECONDS, TimeUnit.SECONDS)
         .update(duration, timeUnit);
   }
@@ -212,7 +219,7 @@ public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M e
       final String fullMeterName;
       String meterName = meter.getMeterName();
       fullMeterName = _metricPrefix + meterName;
-      final MetricName metricName = new MetricName(_clazz, fullMeterName);
+      final MetricName metricName = getMetricName(fullMeterName);
 
       final com.yammer.metrics.core.Meter newMeter =
           MetricsHelper.newMeter(_metricsRegistry, metricName, meter.getUnit(), TimeUnit.SECONDS);
@@ -248,7 +255,7 @@ public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M e
       final String fullMeterName;
       String meterName = meter.getMeterName();
       fullMeterName = _metricPrefix + getTableName(tableName) + "." + meterName;
-      final MetricName metricName = new MetricName(_clazz, fullMeterName);
+      final MetricName metricName = getMetricName(fullMeterName);
 
       final com.yammer.metrics.core.Meter newMeter =
           MetricsHelper.newMeter(_metricsRegistry, metricName, meter.getUnit(), TimeUnit.SECONDS);
@@ -261,7 +268,7 @@ public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M e
     final String fullMeterName;
     String meterName = meter.getMeterName();
     fullMeterName = _metricPrefix + getTableName(tableName) + "." + meterName;
-    final MetricName metricName = new MetricName(_clazz, fullMeterName);
+    final MetricName metricName = getMetricName(fullMeterName);
 
     return MetricsHelper.newMeter(_metricsRegistry, metricName, meter.getUnit(), TimeUnit.SECONDS);
   }
@@ -281,7 +288,7 @@ public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M e
     } else {
       fullMeterName = _metricPrefix + meterName;
     }
-    final MetricName metricName = new MetricName(_clazz, fullMeterName);
+    final MetricName metricName = getMetricName(fullMeterName);
     MetricsHelper.newMeter(_metricsRegistry, metricName, meter.getUnit(), TimeUnit.SECONDS).mark(unitCount);
   }
 
@@ -468,7 +475,7 @@ public abstract class AbstractMetrics<QP extends AbstractMetrics.QueryPhase, M e
    * @param valueCallback The callback function used to retrieve the value of the gauge
    */
   public void addCallbackGauge(final String metricName, final Callable<Long> valueCallback) {
-    MetricsHelper.newGauge(_metricsRegistry, new MetricName(_clazz, _metricPrefix + metricName),
+    MetricsHelper.newGauge(_metricsRegistry, getMetricName(_metricPrefix + metricName),
         new com.yammer.metrics.core.Gauge<Long>() {
           @Override
           public Long value() {
