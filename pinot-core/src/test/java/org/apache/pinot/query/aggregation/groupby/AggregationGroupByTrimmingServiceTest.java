@@ -81,6 +81,21 @@ public class AggregationGroupByTrimmingServiceTest {
     _trimmingService = new AggregationGroupByTrimmingService(AGGREGATION_FUNCTIONS, GROUP_BY_TOP_N);
   }
 
+  private int checkTrimmedResults(List<Map<String, Object>> trimmedIntermediateResultMaps) {
+    Map<String, Object> trimmedSumResultMap = trimmedIntermediateResultMaps.get(0);
+    Map<String, Object> trimmedDistinctCountResultMap = trimmedIntermediateResultMaps.get(1);
+    int trimSize = trimmedSumResultMap.size();
+    Assert.assertEquals(trimmedDistinctCountResultMap.size(), trimSize, ERROR_MESSAGE);
+    for (int i = NUM_GROUPS - trimSize; i < NUM_GROUPS; i++) {
+      String group = _groups.get(i);
+      Assert.assertEquals(((Double) trimmedSumResultMap.get(group)).intValue(), i, ERROR_MESSAGE);
+      Assert.assertEquals(((IntOpenHashSet) trimmedDistinctCountResultMap.get(group)).size(),
+              i / (NUM_GROUPS / MAX_SIZE_OF_SET) + 1, ERROR_MESSAGE);
+    }
+
+    return trimSize;
+  }
+
   @SuppressWarnings("unchecked")
   @Test
   public void testTrimming() {
@@ -95,24 +110,15 @@ public class AggregationGroupByTrimmingServiceTest {
     }
     List<Map<String, Object>> trimmedIntermediateResultMaps =
         _trimmingService.trimIntermediateResultsMap(intermediateResultsMap);
-    Map<String, Object> trimmedSumResultMap = trimmedIntermediateResultMaps.get(0);
-    Map<String, Object> trimmedDistinctCountResultMap = trimmedIntermediateResultMaps.get(1);
-    int trimSize = trimmedSumResultMap.size();
-    Assert.assertEquals(trimmedDistinctCountResultMap.size(), trimSize, ERROR_MESSAGE);
-    for (int i = NUM_GROUPS - trimSize; i < NUM_GROUPS; i++) {
-      String group = _groups.get(i);
-      Assert.assertEquals(((Double) trimmedSumResultMap.get(group)).intValue(), i, ERROR_MESSAGE);
-      Assert.assertEquals(((IntOpenHashSet) trimmedDistinctCountResultMap.get(group)).size(),
-          i / (NUM_GROUPS / MAX_SIZE_OF_SET) + 1, ERROR_MESSAGE);
-    }
+    int trimSize = checkTrimmedResults(trimmedIntermediateResultMaps);
 
     // Test Broker side trimming
     Map<String, Comparable> finalDistinctCountResultMap = new HashMap<>(trimSize);
-    for (Map.Entry<String, Object> entry : trimmedDistinctCountResultMap.entrySet()) {
+    for (Map.Entry<String, Object> entry : trimmedIntermediateResultMaps.get(1).entrySet()) {
       finalDistinctCountResultMap.put(entry.getKey(), ((IntOpenHashSet) entry.getValue()).size());
     }
     List[] groupByResultLists =
-        _trimmingService.trimFinalResults(new Map[]{trimmedSumResultMap, finalDistinctCountResultMap});
+        _trimmingService.trimFinalResults(new Map[]{trimmedIntermediateResultMaps.get(0), finalDistinctCountResultMap});
     List<GroupByResult> sumGroupByResultList = groupByResultLists[0];
     List<GroupByResult> distinctCountGroupByResultList = groupByResultLists[1];
     for (int i = 0; i < GROUP_BY_TOP_N; i++) {
@@ -130,6 +136,39 @@ public class AggregationGroupByTrimmingServiceTest {
           .assertEquals(distinctCountGroupByResult.getValue(), expectedGroupIndex / (NUM_GROUPS / MAX_SIZE_OF_SET) + 1,
               ERROR_MESSAGE);
     }
+  }
+
+  @Test
+  public void testTrimmingResults() {
+    // Test Server side trimming
+    List<Map<String, Object>> intermediateResults = new ArrayList<>();
+    for (int i = 0; i < 2; i++) {
+      intermediateResults.add(new HashMap<>(NUM_GROUPS));
+    }
+
+    for (int i = 0; i < NUM_GROUPS; i++) {
+      IntOpenHashSet set = new IntOpenHashSet();
+      for (int j = 0; j <= i; j += NUM_GROUPS / MAX_SIZE_OF_SET) {
+        set.add(j);
+      }
+      intermediateResults.get(0).put(_groups.get(i), (double) i);
+      intermediateResults.get(1).put(_groups.get(i), set);
+    }
+
+    List<Map<String, Object>> trimmedIntermediateResultMaps =
+            _trimmingService.trimIntermediateResults(intermediateResults);
+    Map<String, Object> trimmedSumResultMap = trimmedIntermediateResultMaps.get(0);
+    Map<String, Object> trimmedDistinctCountResultMap = trimmedIntermediateResultMaps.get(1);
+    int trimSize = trimmedSumResultMap.size();
+    Assert.assertEquals(trimmedDistinctCountResultMap.size(), trimSize, ERROR_MESSAGE);
+    for (int i = NUM_GROUPS - trimSize; i < NUM_GROUPS; i++) {
+      String group = _groups.get(i);
+      Assert.assertEquals(((Double) trimmedSumResultMap.get(group)).intValue(), i, ERROR_MESSAGE);
+      Assert.assertEquals(((IntOpenHashSet) trimmedDistinctCountResultMap.get(group)).size(),
+              i / (NUM_GROUPS / MAX_SIZE_OF_SET) + 1, ERROR_MESSAGE);
+    }
+
+    checkTrimmedResults(trimmedIntermediateResultMaps);
   }
 
   private static String buildGroupString(List<String> group) {
