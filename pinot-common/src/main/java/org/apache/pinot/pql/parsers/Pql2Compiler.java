@@ -24,6 +24,9 @@ import java.util.Stack;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
+
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.antlr.v4.runtime.ANTLRInputStream;
 import org.antlr.v4.runtime.BailErrorStrategy;
 import org.antlr.v4.runtime.BaseErrorListener;
@@ -73,6 +76,13 @@ public class Pql2Compiler implements AbstractCompiler {
   public static String ENABLE_DISTINCT_KEY = "pinot.distinct.enabled";
   public static boolean ENABLE_DISTINCT = Boolean.valueOf(System.getProperty(ENABLE_DISTINCT_KEY, "true"));
 
+  private static final int REQUEST_CACHE_SIZE = 1_000;
+  private static final int TRANSFORM_CACHE_SIZE = 1_000;
+
+  private static final Cache<String, BrokerRequest> _brokerRequestCache = Caffeine.newBuilder().maximumSize(REQUEST_CACHE_SIZE).build();
+  private static final Cache<String, BrokerRequest> _brokerRequestCacheWithPinotQuery = Caffeine.newBuilder().maximumSize(REQUEST_CACHE_SIZE).build();
+  private static final Cache<String, TransformExpressionTree> _expressionTreeCache = Caffeine.newBuilder().maximumSize(TRANSFORM_CACHE_SIZE).build();
+
   private static class ErrorListener extends BaseErrorListener {
 
     @Override
@@ -84,6 +94,14 @@ public class Pql2Compiler implements AbstractCompiler {
 
   private static final ErrorListener ERROR_LISTENER = new ErrorListener();
 
+  private static Cache<String, BrokerRequest> getBrokerRequestCache() {
+    if (ENABLE_PINOT_QUERY) {
+      return _brokerRequestCacheWithPinotQuery;
+    }
+
+    return _brokerRequestCache;
+  }
+
   /**
    * Compile the given expression into {@link BrokerRequest}.
    *
@@ -94,7 +112,13 @@ public class Pql2Compiler implements AbstractCompiler {
   public BrokerRequest compileToBrokerRequest(String expression)
       throws Pql2CompilationException {
     try {
-      //
+      // Try to load previously cached result
+      BrokerRequest cached = getBrokerRequestCache().getIfPresent(expression);
+      if (cached != null) {
+        return cached.deepCopy();
+      }
+
+      // Initialize
       CharStream charStream = new ANTLRInputStream(expression);
       PQL2Lexer lexer = new PQL2Lexer(charStream);
       lexer.setTokenFactory(new CommonTokenFactory(true));
@@ -144,7 +168,11 @@ public class Pql2Compiler implements AbstractCompiler {
           }
         }
       }
-      return brokerRequest;
+
+      // Cache parsed broker request for reuse
+      getBrokerRequestCache().put(expression, brokerRequest);
+      
+      return brokerRequest.deepCopy();
     } catch (Pql2CompilationException e) {
       throw e;
     } catch (Exception e) {
@@ -153,6 +181,13 @@ public class Pql2Compiler implements AbstractCompiler {
   }
 
   public TransformExpressionTree compileToExpressionTree(String expression) {
+    // Check for cached expression tree
+    TransformExpressionTree transformExpressionTree = _expressionTreeCache.getIfPresent(expression);
+    if (transformExpressionTree != null) {
+      return transformExpressionTree;
+    }
+
+    // Initialize
     CharStream charStream = new ANTLRInputStream(expression);
     PQL2Lexer lexer = new PQL2Lexer(charStream);
     lexer.setTokenFactory(new CommonTokenFactory(true));
@@ -167,7 +202,11 @@ public class Pql2Compiler implements AbstractCompiler {
     Pql2AstListener listener = new Pql2AstListener(expression);
     walker.walk(listener, parseTree);
 
-    return new TransformExpressionTree(listener.getRootNode());
+    // Cache result for future reuse
+    transformExpressionTree = new TransformExpressionTree(listener.getRootNode());
+    _expressionTreeCache.put(expression, transformExpressionTree);
+
+    return transformExpressionTree;
   }
 
   private void validateHavingClause(AstNode rootNode) {
